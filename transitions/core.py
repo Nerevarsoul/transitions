@@ -167,6 +167,12 @@ class Condition(object):
         self.func = func
         self.target = target
 
+    def get_condition_check(self, event_data):
+        predicate = event_data.machine.resolve_callable(self.func, event_data)
+        if event_data.machine.send_event:
+            return predicate(event_data)
+        return predicate(*event_data.args, **event_data.kwargs)
+
     def check(self, event_data):
         """ Check whether the condition passes.
         Args:
@@ -176,10 +182,7 @@ class Condition(object):
                 model attached to the current machine which is used to invoke
                 the condition.
         """
-        predicate = event_data.machine.resolve_callable(self.func, event_data)
-        if event_data.machine.send_event:
-            return predicate(event_data) == self.target
-        return predicate(*event_data.args, **event_data.kwargs) == self.target
+        return self.get_condition_check(event_data) == self.target
 
     def __repr__(self):
         return "<%s(%s)@%s>" % (type(self).__name__, self.func, id(self))
@@ -202,6 +205,7 @@ class Transition(object):
 
     # A list of dynamic methods which can be resolved by a ``Machine`` instance for convenience functions.
     dynamic_methods = ['before', 'after', 'prepare']
+    condition_class = Condition
 
     def __init__(self, source, dest, conditions=None, unless=None, before=None,
                  after=None, prepare=None):
@@ -230,10 +234,10 @@ class Transition(object):
         self.conditions = []
         if conditions is not None:
             for cond in listify(conditions):
-                self.conditions.append(Condition(cond))
+                self.conditions.append(self.condition_class(cond))
         if unless is not None:
             for cond in listify(unless):
-                self.conditions.append(Condition(cond, target=False))
+                self.conditions.append(self.condition_class(cond, target=False))
 
     def execute(self, event_data):
         """ Execute the transition.
@@ -382,21 +386,26 @@ class Event(object):
         # to Machine users.
         return self.machine._process(func)
 
+    def _prepare_event_data(self, model, *args, **kwargs):
+        state = self.machine.get_state(model.state)
+        if state.name not in self.transitions:
+            msg = "%sCan't trigger event %s from state %s!" % (self.machine.name, self.name, state.name)
+            if state.ignore_invalid_triggers:
+                _LOGGER.warning(msg)
+                return
+            else:
+                raise MachineError(msg)
+        return EventData(state, self, self.machine, model, args=args, kwargs=kwargs)
+
     def _trigger(self, model, *args, **kwargs):
         """ Internal trigger function called by the ``Machine`` instance. This should not
         be called directly but via the public method ``Machine.trigger``.
         """
-        state = self.machine.get_state(model.state)
-        if state.name not in self.transitions:
-            msg = "%sCan't trigger event %s from state %s!" % (self.machine.name, self.name,
-                                                               state.name)
-            if state.ignore_invalid_triggers:
-                _LOGGER.warning(msg)
-                return False
-            else:
-                raise MachineError(msg)
-        event_data = EventData(state, self, self.machine, model, args=args, kwargs=kwargs)
-        return self._process(event_data)
+        event_data = self._prepare_event_data(model, *args, **kwargs)
+        if event_data:
+            return self._process(event_data)
+        else:
+            return False
 
     def _process(self, event_data):
         for func in self.machine.prepare_event:
@@ -998,11 +1007,12 @@ class Machine(object):
                 from (if event sending is disabled).
         """
 
+        # if func is asyncio coroutine, return it and await in callback method of AsyncMachine
         func = self.resolve_callable(func, event_data)
         if self.send_event:
-            func(event_data)
+            return func(event_data)
         else:
-            func(*event_data.args, **event_data.kwargs)
+            return func(*event_data.args, **event_data.kwargs)
 
     @staticmethod
     def resolve_callable(func, event_data):

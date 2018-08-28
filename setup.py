@@ -1,6 +1,8 @@
 import codecs
 import sys
 from setuptools import setup, find_packages
+from setuptools.command.install_lib import install_lib
+from setuptools.command.build_py import build_py
 
 with open('transitions/version.py') as f:
     exec(f.read())
@@ -23,7 +25,41 @@ if 'setuptools' in sys.modules:
         test_suite='nose.collector',
     )
 
+
+def _not_async(filepath):
+    return filepath.find('aio/') < 0
+
+
+# Do not copy async module for Python 3.4 or below.
+class nocopy_async(build_py):
+    def find_all_modules(self):
+        modules = build_py.find_all_modules(self)
+        modules = list(filter(lambda m: _not_async(m[-1]), modules))
+        return modules
+
+    def find_package_modules(self, package, package_dir):
+        modules = build_py.find_package_modules(self, package, package_dir)
+        modules = list(filter(lambda m: _not_async(m[-1]), modules))
+        return modules
+
+
+# Do not compile async.py for Python 3.4 or below.
+class nocompile_async(install_lib):
+    def byte_compile(self, files):
+        files = list(filter(_not_async, files))
+        install_lib.byte_compile(self, files)
+
+
+PY_35 = sys.version_info >= (3,5)
+cmdclass = {}
+
+if not PY_35:
+    # do not copy/compile async version for older Python
+    cmdclass['build_py'] = nocopy_async
+    cmdclass['install_lib'] = nocompile_async
+
 setup(
+    cmdclass=cmdclass,
     name="transitions",
     version=__version__,
     description="A lightweight, object-oriented Python state machine implementation.",
