@@ -238,7 +238,7 @@ class NestedTransition(Transition):
 class NestedEvent(Event):
     """ An event type to work with nested states. """
 
-    def _trigger(self, model, *args, **kwargs):
+    def _prepare_event_data(self, model, *args, **kwargs):
         state = self.machine.get_state(model.state)
         while state.parent and state.name not in self.transitions:
             state = state.parent
@@ -249,9 +249,7 @@ class NestedEvent(Event):
                 _LOGGER.warning(msg)
             else:
                 raise MachineError(msg)
-        event_data = EventData(state, self, self.machine,
-                               model, args=args, kwargs=kwargs)
-        return self._process(event_data)
+        return EventData(state, self, self.machine, model, args=args, kwargs=kwargs)
 
 
 class HierarchicalMachine(Machine):
@@ -501,23 +499,26 @@ class HierarchicalMachine(Machine):
         """
         self.get_state(state_name).add_callback('exit', callback)
 
+    def get_event(self, model, state_name, *args, **kwargs):
+        # TODO: Remove in 0.7.0
+        if not isinstance(state_name, string_types):
+            warnings.warn(
+                "'HierarchicalMachine.to' has been renamed to 'HierarchicalMachine.to_state' and "
+                "will be removed in transitions version 0.7.0.", DeprecationWarning)
+            model = state_name
+            state_name = args[0]
+            args = tuple(x for idx, x in enumerate(args) if idx > 0)
+
+        return EventData(self.get_state(model.state), Event('to', self), self,
+                         model, args=args, kwargs=kwargs), state_name
+
     def to_state(self, model, state_name, *args, **kwargs):
         """ Helper function to add go to states in case a custom state separator is used.
         Args:
             model (class): The model that should be used.
             state_name (str): Name of the destination state.
         """
-
-        # TODO: Remove in 0.7.0
-        if not isinstance(state_name, string_types):
-            warnings.warn("'HierarchicalMachine.to' has been renamed to 'HierarchicalMachine.to_state' and "
-                          "will be removed in transitions version 0.7.0.", DeprecationWarning)
-            model = state_name
-            state_name = args[0]
-            args = tuple(x for idx, x in enumerate(args) if idx > 0)
-
-        event = EventData(self.get_state(model.state), Event('to', self), self,
-                          model, args=args, kwargs=kwargs)
+        event, state_name = self.get_event(model, state_name, *args, **kwargs)
         self._create_transition(model.state, state_name).execute(event)
 
     # TODO: Remove in 0.7.0
